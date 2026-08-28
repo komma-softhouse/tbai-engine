@@ -1,0 +1,99 @@
+<?php
+
+namespace Komma\Tbai\CancelInvoice;
+
+use Komma\Tbai\Interfaces\TbaiXml;
+use Komma\Tbai\CancelInvoice\Header;
+use Komma\Tbai\Subject\Issuer;
+use Komma\Tbai\ValueObject\Date;
+use Komma\Tbai\ValueObject\VatId;
+use DOMDocument;
+use DOMNode;
+use DOMXPath;
+
+class InvoiceId implements TbaiXml
+{
+    private Issuer $issuer;
+    private Header $header;
+
+    public function __construct(Issuer $issuer, Header $header)
+    {
+        $this->issuer = $issuer;
+        $this->header = $header;
+    }
+
+    public function xml(DOMDocument $domDocument): DOMNode
+    {
+        $invoiceId = $domDocument->createElement('IDFactura');
+
+        $invoiceId->appendChild($this->issuer->xml($domDocument));
+        $invoiceId->appendChild($this->header->xml($domDocument));
+
+        return $invoiceId;
+    }
+
+    public function expeditionDate(): Date
+    {
+        return $this->header->expeditionDate();
+    }
+
+    public function series(): string
+    {
+        return $this->header->series();
+    }
+
+    public function invoiceNumber(): string
+    {
+        return $this->header->invoiceNumber();
+    }
+
+
+    public function issuerVatId(): VatId
+    {
+        return $this->issuer->vatId();
+    }
+
+    public function issuerName(): string
+    {
+        return $this->issuer->name();
+    }
+
+
+    public static function createFromJson(array $jsonData): self
+    {
+        $issuer = Issuer::createFromJson($jsonData['issuer']);
+        $header = Header::createFromJson($jsonData['header']);
+        $invoiceId = new InvoiceId($issuer, $header);
+        return $invoiceId;
+    }
+
+    public static function createFromXml(DOMXPath $xpath, DOMNode $contextNode): self
+    {
+        $contextNode = $xpath->query('IDFactura', $contextNode)->item(0);
+
+        $issuer = Issuer::createFromXml($xpath, $contextNode);
+        $header = Header::createFromXml($xpath, $contextNode);
+
+        return new self($issuer, $header);
+    }
+
+    public static function docJson(): array
+    {
+        return [
+            'type' => 'object',
+            'properties' => [
+                'issuer' => Issuer::docJson(),
+                'header' => Header::docJson(),
+            ],
+            'required' => ['header', 'data', 'breakdown']
+        ];
+    }
+
+    public function toArray(): array
+    {
+        return [
+            'issuer' => $this->issuer->toArray(),
+            'header' => $this->header->toArray(),
+        ];
+    }
+}

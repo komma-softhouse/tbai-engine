@@ -1,0 +1,69 @@
+{
+  "territory": "01",
+  "subject": {
+    "issuer": {
+      "vatId": "00000015S",
+      "name": "Gaueko Akerbeltz"
+    },
+    "recipients": [
+      {
+        "vatId": "00000000T",
+        "vatIdType": "02",
+        "name": "Client Name",
+        "postalCode": "48270",
+        "address": "Markina-Xemein",
+        "countryCode": "ES"
+      }
+    ],
+    "issuedBy": "N"
+  },
+  "invoice": {
+    "header": {
+      "series": "TESTSERIE",
+      "invoiceNumber": "1646674248",
+      "expeditionDate": "07-03-2025",
+      "expeditionTime": "17:30:48",
+      "simplifiedInvoice": false
+    },
+    "data": {
+      "description": "factura ejemplo TBAI",
+      "details": [
+        {
+          "description": "Art\u00edculo 1 Ejemplo",
+          "unitPrice": "10.00",
+          "quantity": "1",
+          "discount": null,
+          "totalAmount": "12.1"
+        }
+      ],
+      "total": "12.1",
+      "vatRegimes": [
+        "51"
+      ],
+      "supportedRetention": null,
+      "taxBaseCost": null
+    },
+    "breakdown": {
+      "nationalSubjectExemptBreakdownItems": [],
+      "nationalSubjectNotExemptBreakdownItems": [
+        {
+          "type": "S1",
+          "vatDetails": [
+            {
+              "taxBase": "10",
+              "taxRate": "21",
+              "taxQuota": "2.1",
+              "equivalenceRate": "",
+              "equivalenceQuota": "",
+              "isEquivalenceOperation": true
+            }
+          ]
+        }
+      ],
+      "nationalNotSubjectBreakdownItems": []
+    }
+  },
+  "fingerprint": {
+    "previousInvoice": null
+  }
+}

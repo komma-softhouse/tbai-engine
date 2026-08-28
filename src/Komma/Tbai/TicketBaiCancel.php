@@ -1,0 +1,171 @@
+<?php
+
+namespace Komma\Tbai;
+
+use Komma\Tbai\CancelInvoice\Fingerprint;
+use Komma\Tbai\CancelInvoice\Header as CancelInvoiceHeader;
+use Komma\Tbai\CancelInvoice\InvoiceId;
+use DOMNode;
+use DOMDocument;
+use Komma\Tbai\ValueObject\Date;
+use Komma\Tbai\ValueObject\VatId;
+use Komma\Tbai\Fingerprint\Vendor;
+use DOMXPath;
+use InvalidArgumentException;
+
+class TicketBaiCancel extends AbstractTicketBai
+{
+    private Header $header; // Same as SubmitInvoice
+    private InvoiceId $invoiceId; // Does not exist on SubmitInvoice
+    private Fingerprint $fingerprint; // Without previousInvoice data
+    private bool $selfEmployed;
+
+    public function __construct(InvoiceId $invoiceId, Fingerprint $fingerprint, string $territory, bool $selfEmployed = false)
+    {
+        parent::__construct($territory);
+        $this->header = new Header();
+        $this->invoiceId = $invoiceId;
+        $this->fingerprint = $fingerprint;
+        $this->selfEmployed = $selfEmployed;
+    }
+
+    public static function createForTicketBai(TicketBai $ticketbai): self
+    {
+        $header = CancelInvoiceHeader::createForTicketBai($ticketbai);
+        $invoiceId = new InvoiceId($ticketbai->issuer(), $header);
+        $fingerprint = new Fingerprint($ticketbai->fingerprint()->vendor());
+        return new self($invoiceId, $fingerprint, $ticketbai->territory(), $ticketbai->selfEmployed());
+    }
+
+    public function issuerVatId(): VatId
+    {
+        return $this->invoiceId->issuerVatId();
+    }
+
+    public function issuerName(): string
+    {
+        return $this->invoiceId->issuerName();
+    }
+
+    public function expeditionDate(): Date
+    {
+        return $this->invoiceId->expeditionDate();
+    }
+
+    public function series(): string
+    {
+        return $this->invoiceId->series();
+    }
+
+    public function invoiceNumber(): string
+    {
+        return $this->invoiceId->invoiceNumber();
+    }
+
+    public function fingerprint(): Fingerprint
+    {
+        return $this->fingerprint;
+    }
+
+    public function selfEmployed(): bool
+    {
+        return $this->selfEmployed;
+    }
+
+    public function xml(DOMDocument $document): DOMNode
+    {
+        $tbai = $document->createElementNS('urn:ticketbai:anulacion', 'T:AnulaTicketBai');
+        $tbai->appendChild($this->header->xml($document));
+        $tbai->appendChild($this->invoiceId->xml($document));
+        $tbai->appendChild($this->fingerprint->xml($document));
+
+        $document->appendChild($tbai);
+        return $tbai;
+    }
+
+    public static function createFromJson(Vendor $vendor, array $jsonData): self
+    {
+        $territory = $jsonData['territory'];
+        $invoiceId = InvoiceId::createFromJson($jsonData['invoiceId']);
+        $fingerprint = Fingerprint::createFromJson($vendor, $jsonData['fingerprint'] ?? []);
+
+        // DEPRECATE: Should only check for selfEmployed value
+        $selfEmployed = false;
+        if (array_key_exists('selfEmployed', $jsonData)) {
+            $selfEmployed = (bool)$jsonData['selfEmployed'];
+        } else if (array_key_exists('self_employed', $jsonData)) {
+            trigger_error(
+                'Deprecated. Avoid "self_employed" tag on json, "selfEmployed" should be used instead. Future versions will remove this tag',
+                E_USER_DEPRECATED
+            );
+
+            $selfEmployed = (bool)$jsonData['self_employed'];
+        }
+
+        return new TicketBaiCancel($invoiceId, $fingerprint, $territory, $selfEmployed);
+    }
+
+    public static function createFromXml(string $xml, string $territory, bool $selfEmployed = false, string $signedFileStoragePath = null): self
+    {
+        $dom = new DOMDocument();
+
+        if (!$dom->loadXML($xml)) {
+            throw new InvalidArgumentException('Invalid XML string');
+        }
+
+        $xpath = new DOMXPath($dom);
+
+        if (($root = $xpath->query('/T:AnulaTicketBai')->item(0)) === null) {
+            throw new InvalidArgumentException('Invalid TicketBai XML');
+        }
+
+        $ticketBaiCancel = new self(
+            InvoiceId::createFromXml($xpath, $root),
+            Fingerprint::createFromXml($xpath, $root),
+            $territory,
+            $selfEmployed
+        );
+
+        $ticketBaiCancel->verifySignature($xml, $signedFileStoragePath);
+
+        return $ticketBaiCancel;
+    }
+
+    public static function docJson(): array
+    {
+        $json = [
+            'type' => 'object',
+            'properties' => [
+                'territory' => [
+                    'type' => 'string',
+                    'enum' => self::validTerritories(),
+                    'description' => '
+Faktura baliogabetuko den lurraldea - Territorio en el que se cancelará la factura
+  * 01: Araba
+  * 02: Bizkaia
+  * 03: Gipuzkoa
+'
+                ],
+                'selfEmployed' => [
+                    'type' => 'boolean',
+                    'default' => false,
+                    'description' => 'Fakturaren egilea autonomoa bada - Si el emisor de la factura es autónomo'
+                ],
+                'invoiceId' => InvoiceId::docJson(),
+                'fingerprint' => Fingerprint::docJson()
+            ],
+            'required' => ['territory', 'invoiceId', 'fingerprint']
+        ];
+        return $json;
+    }
+
+    public function toArray(): array
+    {
+        return [
+            'territory' => $this->territory,
+            'selfEmployed' => $this->selfEmployed,
+            'invoiceId' => $this->invoiceId->toArray(),
+            'fingerprint' => $this->fingerprint->toArray(),
+        ];
+    }
+}

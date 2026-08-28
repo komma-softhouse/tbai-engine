@@ -1,0 +1,13 @@
+/tools/
+/vendor/
+phpunit.xml
+.phpunit.*
+composer.lock
+tests/Komma/Tbai/__files/signedXmls/
+tests/Komma/Tbai/__files/responses/
+tests/Komma/Tbai/__files/sentFiles/
+tests/Komma/Tbai/__files/qr/
+tests/tools/*.p12
+/nbproject
+/specs/ignore-*
+

@@ -1,0 +1,211 @@
+<?php
+
+namespace Komma\Tbai;
+
+use Komma\Tbai\Api\Bizkaia\IncomeTax\Collection;
+use DOMNode;
+use DOMDocument;
+use Komma\Tbai\ValueObject\Date;
+use Komma\Tbai\ValueObject\VatId;
+use Komma\Tbai\Fingerprint\Vendor;
+use Komma\Tbai\ValueObject\Amount;
+use Komma\Tbai\Subject\Issuer;
+use DOMXPath;
+use InvalidArgumentException;
+
+class TicketBai extends AbstractTicketBai
+{
+    private Header $header;
+    private Subject $subject;
+    private Invoice $invoice;
+    private Fingerprint $fingerprint;
+    private bool $selfEmployed;
+    private ?Collection $batuzIncomeTaxCollection = null;
+
+    public function __construct(Subject $subject, Invoice $invoice, Fingerprint $fingerprint, string $territory, bool $selfEmployed = false)
+    {
+        parent::__construct($territory);
+        $this->header = new Header();
+        $this->subject = $subject;
+        $this->invoice = $invoice;
+        $this->fingerprint = $fingerprint;
+        $this->selfEmployed = $selfEmployed;
+    }
+
+    public function subject(): Subject
+    {
+        return $this->subject;
+    }
+
+    public function issuerVatId(): VatId
+    {
+        return $this->subject->issuerVatId();
+    }
+
+    public function issuerName(): string
+    {
+        return $this->subject->issuerName();
+    }
+
+    public function issuer(): Issuer
+    {
+        return $this->subject->issuer();
+    }
+
+    public function expeditionDate(): Date
+    {
+        return $this->invoice->expeditionDate();
+    }
+
+    public function series(): string
+    {
+        return $this->invoice->series();
+    }
+
+    public function invoiceNumber(): string
+    {
+        return $this->invoice->invoiceNumber();
+    }
+
+    public function totalAmount(): Amount
+    {
+        return $this->invoice->totalAmount();
+    }
+
+    public function invoice(): Invoice
+    {
+        return $this->invoice;
+    }
+
+    public function fingerprint(): Fingerprint
+    {
+        return $this->fingerprint;
+    }
+
+    public function selfEmployed(): bool
+    {
+        return $this->selfEmployed;
+    }
+
+    public function xml(DOMDocument $document): DOMNode
+    {
+        $tbai = $document->createElementNS('urn:ticketbai:emision', 'T:TicketBai');
+        $tbai->appendChild($this->header->xml($document));
+        $tbai->appendChild($this->subject->xml($document));
+        $tbai->appendChild($this->invoice->xml($document));
+        $tbai->appendChild($this->fingerprint->xml($document));
+
+        $document->appendChild($tbai);
+        return $tbai;
+    }
+
+    public static function createFromXml(string $xml, string $territory, bool $selfEmployed = false, string $signedFileStoragePath = null): self
+    {
+        $dom = new DOMDocument();
+
+        if (!$dom->loadXML($xml)) {
+            throw new InvalidArgumentException('Invalid XML string');
+        }
+
+        $xpath = new DOMXPath($dom);
+
+        if (($root = $xpath->query('/T:TicketBai')->item(0)) === null) {
+            throw new InvalidArgumentException('Invalid TicketBai XML');
+        }
+
+        $ticketBai = new self(
+            Subject::createFromXml($xpath, $root),
+            Invoice::createFromXml($xpath),
+            Fingerprint::createFromXml($xpath, $root),
+            $territory,
+            $selfEmployed
+        );
+
+        $ticketBai->verifySignature($xml, $signedFileStoragePath);
+
+        return $ticketBai;
+    }
+
+    public static function createFromJson(Vendor $vendor, array $jsonData): self
+    {
+        $territory = $jsonData['territory'];
+        $subject = Subject::createFromJson($jsonData['subject']);
+        $invoice = Invoice::createFromJson($jsonData['invoice']);
+        $fingerprint = Fingerprint::createFromJson($vendor, $jsonData['fingerprint'] ?? []);
+
+        // DEPRECATE: Should only check for selfEmployed value
+        $selfEmployed = false;
+        if (array_key_exists('selfEmployed', $jsonData)) {
+            $selfEmployed = (bool)$jsonData['selfEmployed'];
+        } else if (array_key_exists('self_employed', $jsonData)) {
+            trigger_error(
+                'Deprecated. Avoid "self_employed" tag on json, "selfEmployed" should be used instead. Future versions will remove this tag',
+                E_USER_DEPRECATED
+            );
+
+            $selfEmployed = (bool)$jsonData['self_employed'];
+        }
+
+        $ticketBai = new TicketBai($subject, $invoice, $fingerprint, $territory, $selfEmployed);
+
+        if (array_key_exists('batuzIncomeTaxes', $jsonData) && is_array($jsonData['batuzIncomeTaxes']) && $jsonData['batuzIncomeTaxes']) {
+            $batuzIncomeTaxCollection = Collection::createFromJson($jsonData['batuzIncomeTaxes']);
+            $ticketBai->addBatuzIncomeTaxes($batuzIncomeTaxCollection);
+        }
+
+        return $ticketBai;
+    }
+
+    public static function docJson(): array
+    {
+        $json = [
+            'type' => 'object',
+            'properties' => [
+                'territory' => [
+                    'type' => 'string',
+                    'enum' => self::validTerritories(),
+                    'description' => '
+Faktura aurkeztuko den lurraldea - Territorio en el que se presentará la factura
+  * 01: Araba
+  * 02: Bizkaia
+  * 03: Gipuzkoa
+'
+                ],
+                'selfEmployed' => [
+                    'type' => 'boolean',
+                    'default' => false,
+                    'description' => 'Fakturaren egilea autonomoa bada - Si el emisor de la factura es autónomo'
+                ],
+                'subject' => Subject::docJson(),
+                'invoice' => Invoice::docJson(),
+                'fingerprint' => Fingerprint::docJson(),
+                'batuzIncomeTaxes' => Collection::docJson()
+            ],
+            'required' => ['territory', 'subject', 'invoice', 'fingerprint']
+        ];
+        return $json;
+    }
+
+    public function toArray(): array
+    {
+        return [
+            'territory' => $this->territory,
+            'selfEmployed' => $this->selfEmployed,
+            'subject' => $this->subject->toArray(),
+            'invoice' => $this->invoice->toArray(),
+            'fingerprint' => $this->fingerprint->toArray(),
+            'batuzIncomeTaxes' =>  $this->batuzIncomeTaxCollection ? $this->batuzIncomeTaxCollection->toArray() : []
+        ];
+    }
+
+    public function addBatuzIncomeTaxes(Collection $incomeTaxCollection): self
+    {
+        $this->batuzIncomeTaxCollection = $incomeTaxCollection;
+        return $this;
+    }
+
+    public function batuzIncomeTaxes(): ?Collection
+    {
+        return $this->batuzIncomeTaxCollection;
+    }
+}

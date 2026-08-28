@@ -1,0 +1,26 @@
+{
+    "name": "komma-softhouse/tbai-engine",
+    "description": "Generate, sign and submit TicketBAI compatible invoices",
+    "type": "library",
+    "license": "proprietary",
+    "autoload": {
+        "psr-4": {
+            "Komma\\": "src/Komma",
+            "Test\\Komma\\": "tests/Komma"
+        }
+    },
+    "scripts": {
+      "phpstan": "phpstan analyse -c phpstan.neon",
+      "phpcs": "phpcs",
+      "phpcbf": "phpcbf"
+    },
+    "require": {
+        "php": ">=8.3",
+        "endroid/qr-code": "^4.4",
+        "pburggraf/crc": "^0.8.1",
+        "lyquidity/xml-signer": "^1.12"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^8.0"
+    }
+}

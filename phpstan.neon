@@ -1,0 +1,18 @@
+parameters:
+  level: 5
+  phpVersion: 70400
+  paths:
+    - src
+    - tests
+  ignoreErrors:
+    -
+      message: '#Access to an undefined property .*::\$saveFilename#'
+      path: src/Komma/Tbai/Xades/TicketBai.php
+    -
+      message: '#Parameter \#3 \$mimeType of class .*#'
+      path: src/Komma/Tbai/Xades/TicketBai.php
+    -
+      message: '#.* will always evaluate to true.*#'
+    -
+      message: '#.* is never assigned null.*#'
+    

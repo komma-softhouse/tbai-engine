@@ -1,0 +1,34 @@
+<?php
+
+namespace Komma\Tbai\Api\Araba;
+
+use Komma\Tbai\TicketBaiCancel;
+use Komma\Tbai\Api\ApiRequestInterface;
+
+class CancelInvoiceRequest implements ApiRequestInterface
+{
+    const URL = '/anulaciones';
+    protected string $endpoint;
+    protected TicketBaiCancel $ticketbaiCancel;
+
+    public function __construct(TicketBaiCancel $ticketbaiCancel, string $endpoint)
+    {
+        $this->endpoint = $endpoint;
+        $this->ticketbaiCancel = $ticketbaiCancel;
+    }
+
+    public function url(): string
+    {
+        return $this->endpoint . static::URL;
+    }
+
+    public function data(): string
+    {
+        return $this->ticketbaiCancel->signed();
+    }
+
+    public function jsonDataHeader(): string
+    {
+        return json_encode([]);
+    }
+}
