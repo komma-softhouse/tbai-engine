@@ -37,7 +37,7 @@ class InvoiceId implements TbaiXml
         return $this->header->expeditionDate();
     }
 
-    public function series(): string
+    public function series(): ?string
     {
         return $this->header->series();
     }

@@ -33,7 +33,7 @@ class Header implements TbaiXml
         return self::create($ticketbai->invoiceNumber(), $ticketbai->expeditionDate(), $ticketbai->series());
     }
 
-    public function series(): string
+    public function series(): ?string
     {
         return $this->series;
     }

@@ -52,7 +52,7 @@ class TicketBaiCancel extends AbstractTicketBai
         return $this->invoiceId->expeditionDate();
     }
 
-    public function series(): string
+    public function series(): ?string
     {
         return $this->invoiceId->series();
     }

@@ -66,7 +66,7 @@ class Header implements TbaiXml
         return $header;
     }
 
-    public function series(): string
+    public function series(): ?string
     {
         return $this->series;
     }

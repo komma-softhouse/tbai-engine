@@ -57,7 +57,7 @@ class TicketBai extends AbstractTicketBai
         return $this->invoice->expeditionDate();
     }
 
-    public function series(): string
+    public function series(): ?string
     {
         return $this->invoice->series();
     }
