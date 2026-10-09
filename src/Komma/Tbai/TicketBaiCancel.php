@@ -105,7 +105,7 @@ class TicketBaiCancel extends AbstractTicketBai
         return new TicketBaiCancel($invoiceId, $fingerprint, $territory, $selfEmployed);
     }
 
-    public static function createFromXml(string $xml, string $territory, bool $selfEmployed = false, string $signedFileStoragePath = null): self
+    public static function createFromXml(string $xml, string $territory, bool $selfEmployed = false, ?string $signedFileStoragePath = null): self
     {
         $dom = new DOMDocument();
 

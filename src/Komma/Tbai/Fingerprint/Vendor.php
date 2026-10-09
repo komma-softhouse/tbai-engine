@@ -17,7 +17,7 @@ class Vendor implements TbaiXml
     private string $name;
     private string $version;
 
-    public function __construct(string $license, string $developerId, string $name = null, string $version = null)
+    public function __construct(string $license, string $developerId, ?string $name = null, ?string $version = null)
     {
         $this->license = $license;
         $this->developerId = $developerId;
