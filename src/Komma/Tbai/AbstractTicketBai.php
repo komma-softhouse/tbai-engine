@@ -6,18 +6,14 @@ use DOMNode;
 use Komma\Tbai\Interfaces\Stringable;
 use DOMDocument;
 use JsonSerializable;
-use lyquidity\xmldsig\XAdESException;
 use SimpleXMLElement;
-use lyquidity\xmldsig\XAdES;
-use lyquidity\xmldsig\ResourceInfo;
 use Komma\Tbai\Interfaces\TbaiXml;
-use lyquidity\xmldsig\KeyResourceInfo;
-use lyquidity\xmldsig\InputResourceInfo;
 use Komma\Tbai\Xades\Araba as XadesAraba;
-use lyquidity\xmldsig\CertificateResourceInfo;
 use Komma\Tbai\Xades\Bizkaia as XadesBizkaia;
 use Komma\Tbai\Xades\Gipuzkoa as XadesGipuzkoa;
 use Komma\Tbai\Exception\InvalidTerritoryException;
+use Komma\Tbai\Exception\SignatureException;
+use Komma\Tbai\Xades\TicketBai as Xades;
 use Komma\Tbai\Interfaces\TbaiSignable;
 use Komma\Tbai\ValueObject\Date;
 use Komma\Tbai\ValueObject\VatId;
@@ -76,31 +72,30 @@ abstract class AbstractTicketBai implements TbaiXml, TbaiSignable, Stringable, J
                 );
             }
 
+            if (!isset($certData['cert'], $certData['pkey']) || $certData['pkey'] === false) {
+                throw new SignatureException('The certificate or its password is not valid.');
+            }
+
+            /** @var class-string<Xades> $xadesClass */
             $xadesClass = $this->getXadesClassForTerritory();
 
             if (!file_exists(dirname($signedFileStoragePath))) {
                 mkdir(dirname($signedFileStoragePath), 0777, true);
             }
 
-            call_user_func(
-                $xadesClass . '::signDocument',
-                new InputResourceInfo(
-                    /** @phpstan-ignore-next-line */
-                    $this->dom(),
-                    ResourceInfo::xmlDocument, // The source is a DOMDocument
-                    dirname($signedFileStoragePath), // The location to save the signed document
-                    basename($signedFileStoragePath), // The name of the file to save the signed document in,
-                    null,
-                    false // Enveloped signature
-                ),
-                new CertificateResourceInfo($certData['cert'], ResourceInfo::string | ResourceInfo::pem),
-                new KeyResourceInfo($certData['pkey'], ResourceInfo::string | ResourceInfo::pem)
+            $signed = $xadesClass::signDocument(
+                $this->dom(),
+                $certData['cert'],
+                $certData['pkey'],
+                basename($signedFileStoragePath)
             );
+
+            file_put_contents($signedFileStoragePath, $signed->saveXML());
             $this->signedXmlPath = $signedFileStoragePath;
         }
     }
 
-    public function verifySignature(string $xml, string $signedFileStoragePath = null): bool
+    public function verifySignature(string $xml, ?string $signedFileStoragePath = null): bool
     {
         if (!$signedFileStoragePath) {
             $signedFileStoragePath = tempnam(sys_get_temp_dir(), 'signed-xml');
@@ -108,12 +103,16 @@ abstract class AbstractTicketBai implements TbaiXml, TbaiSignable, Stringable, J
 
         file_put_contents($signedFileStoragePath, $xml);
 
+        $document = new DOMDocument();
+
         try {
-            ob_start();
-            XAdES::verifyDocument($signedFileStoragePath);
-            ob_end_clean();
+            if (!$document->loadXML($xml)) {
+                throw new SignatureException('The signed document is not valid XML.');
+            }
+
+            Xades::verifyDocument($document);
             $this->signedXmlPath = $signedFileStoragePath;
-        } catch (XAdESException $exception) {
+        } catch (SignatureException $exception) {
             unlink($signedFileStoragePath);
             return false;
         }

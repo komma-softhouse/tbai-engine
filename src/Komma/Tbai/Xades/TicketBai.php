@@ -2,126 +2,229 @@
 
 namespace Komma\Tbai\Xades;
 
-use Komma\Tbai\Xades\xmldsig\xml\SigningCertificateV2;
-use lyquidity\xmldsig\XAdES;
-use lyquidity\xmldsig\XMLSecurityDSig;
-use lyquidity\xmldsig\xml\SigPolicyHash;
-use lyquidity\xmldsig\xml\DataObjectFormat;
-use lyquidity\xmldsig\xml\DigestMethod;
-use lyquidity\xmldsig\xml\DigestValue;
-use lyquidity\xmldsig\xml\SignaturePolicyId;
-use lyquidity\xmldsig\xml\SignaturePolicyIdentifier;
-use lyquidity\xmldsig\xml\SignedDataObjectProperties;
-use lyquidity\xmldsig\xml\SigPolicyId;
-use lyquidity\xmldsig\xml\SigPolicyQualifier;
-use lyquidity\xmldsig\xml\SigPolicyQualifiers;
-use lyquidity\OCSP\CertificateLoader;
-use lyquidity\xmldsig\xml\QualifyingProperties;
-use lyquidity\xmldsig\xml\SignatureProductionPlace;
-use lyquidity\xmldsig\xml\SignatureProductionPlaceV2;
-use lyquidity\xmldsig\xml\SignedProperties;
-use lyquidity\xmldsig\xml\SignedSignatureProperties;
-use lyquidity\xmldsig\xml\SignerRole;
-use lyquidity\xmldsig\xml\SignerRoleV2;
-use lyquidity\xmldsig\xml\SigningTime;
+use DOMDocument;
+use DOMElement;
+use DOMXPath;
+use Komma\Tbai\Exception\SignatureException;
+use OpenSSLAsymmetricKey;
 
-class TicketBai extends XAdES
+/**
+ * Enveloped XAdES-EPES signature of a TicketBAI document, built with DOM and
+ * OpenSSL only. The previous XML signing library parsed the certificate with
+ * an ASN.1 big-integer class that needs ext-gmp, which the PHP bundled in
+ * desktop apps (NativePHP) does not ship; nothing here needs it.
+ *
+ * Each territory publishes its own signature policy: the subclasses only set
+ * the policy identifier and the digest of the policy document.
+ */
+abstract class TicketBai
 {
-    const POLICY_IDENTIFIER = '';
-    const POLICY_DIGEST = '';
-    // const POLICY_DOCUMENT_URL = 'https://www.batuz.eus/fitxategiak/batuz/ticketbai/sinadura_elektronikoaren_zehaztapenak_especificaciones_de_la_firma_electronica_v1_0.pdf.';
-    const ALGORITHM = XMLSecurityDSig::SHA256;
+    public const POLICY_IDENTIFIER = '';
+    public const POLICY_DIGEST = '';
 
-    protected function getSignaturePolicyIdentifier()
+    public const NS_DS = 'http://www.w3.org/2000/09/xmldsig#';
+    public const NS_XADES = 'http://uri.etsi.org/01903/v1.3.2#';
+
+    private const C14N = 'http://www.w3.org/TR/2001/REC-xml-c14n-20010315';
+    private const RSA_SHA256 = 'http://www.w3.org/2001/04/xmldsig-more#rsa-sha256';
+    private const SHA256 = 'http://www.w3.org/2001/04/xmlenc#sha256';
+    private const ENVELOPED = 'http://www.w3.org/2000/09/xmldsig#enveloped-signature';
+    private const SIGNED_PROPERTIES_TYPE = 'http://uri.etsi.org/01903#SignedProperties';
+
+    /**
+     * Signs the document in place and returns it.
+     *
+     * @param string $certificate the signing certificate, PEM
+     * @param OpenSSLAsymmetricKey|string $privateKey its private key, PEM or an OpenSSL key
+     * @param string $fileName the name the signed file is stored with, recorded in DataObjectFormat
+     */
+    public static function signDocument(DOMDocument $document, string $certificate, $privateKey, string $fileName): DOMDocument
     {
-        $spi = new SignaturePolicyIdentifier(
-            new SignaturePolicyId(
-                new SigPolicyId(static::POLICY_IDENTIFIER),
-                null,
-                new SigPolicyHash(new DigestMethod(static::ALGORITHM), new DigestValue(static::POLICY_DIGEST)),
-                new SigPolicyQualifiers(new SigPolicyQualifier(static::POLICY_IDENTIFIER))
-            )
-        );
+        $root = $document->documentElement;
 
-        return $spi;
+        if (!$root instanceof DOMElement) {
+            throw new SignatureException('There is no document to sign.');
+        }
+
+        $der = self::certificateDer($certificate);
+        $id = 'xmldsig-' . bin2hex(random_bytes(16));
+        $referenceId = $id . '-ref0';
+        $signedPropertiesId = $id . '-signedprops';
+
+        // The enveloped transform drops the signature, so the document digest is the one it has before signing.
+        $documentDigest = self::digest($root->C14N(false, false));
+
+        $signature = $document->createElementNS(self::NS_DS, 'ds:Signature');
+        $signature->setAttribute('Id', $id);
+        $root->appendChild($signature);
+
+        $signedInfo = self::ds($document, $signature, 'SignedInfo');
+        self::ds($document, $signedInfo, 'CanonicalizationMethod')->setAttribute('Algorithm', self::C14N);
+        self::ds($document, $signedInfo, 'SignatureMethod')->setAttribute('Algorithm', self::RSA_SHA256);
+
+        $propertiesReference = self::ds($document, $signedInfo, 'Reference');
+        $propertiesReference->setAttribute('URI', '#' . $signedPropertiesId);
+        $propertiesReference->setAttribute('Type', self::SIGNED_PROPERTIES_TYPE);
+        self::ds($document, self::ds($document, $propertiesReference, 'Transforms'), 'Transform')->setAttribute('Algorithm', self::C14N);
+        self::ds($document, $propertiesReference, 'DigestMethod')->setAttribute('Algorithm', self::SHA256);
+        $propertiesDigest = self::ds($document, $propertiesReference, 'DigestValue');
+
+        $documentReference = self::ds($document, $signedInfo, 'Reference');
+        $documentReference->setAttribute('Id', $referenceId);
+        $documentReference->setAttribute('URI', '');
+        self::ds($document, self::ds($document, $documentReference, 'Transforms'), 'Transform')->setAttribute('Algorithm', self::ENVELOPED);
+        self::ds($document, $documentReference, 'DigestMethod')->setAttribute('Algorithm', self::SHA256);
+        self::ds($document, $documentReference, 'DigestValue', $documentDigest);
+
+        $signatureValue = self::ds($document, $signature, 'SignatureValue');
+
+        $keyInfo = self::ds($document, $signature, 'KeyInfo');
+        self::ds($document, self::ds($document, $keyInfo, 'X509Data'), 'X509Certificate', base64_encode($der));
+
+        $object = self::ds($document, $signature, 'Object');
+        $qualifying = $document->createElementNS(self::NS_XADES, 'xades:QualifyingProperties');
+        $qualifying->setAttribute('Target', '#' . $id);
+        $object->appendChild($qualifying);
+
+        $signedProperties = self::xades($document, $qualifying, 'SignedProperties');
+        $signedProperties->setAttribute('Id', $signedPropertiesId);
+        $signatureProperties = self::xades($document, $signedProperties, 'SignedSignatureProperties');
+        self::xades($document, $signatureProperties, 'SigningTime', gmdate('Y-m-d\TH:i:s\Z'));
+
+        $certDigest = self::xades($document, self::xades($document, self::xades($document, $signatureProperties, 'SigningCertificateV2'), 'Cert'), 'CertDigest');
+        self::ds($document, $certDigest, 'DigestMethod')->setAttribute('Algorithm', self::SHA256);
+        self::ds($document, $certDigest, 'DigestValue', base64_encode(hash('sha256', $der, true)));
+
+        $policyId = self::xades($document, self::xades($document, $signatureProperties, 'SignaturePolicyIdentifier'), 'SignaturePolicyId');
+        self::xades($document, self::xades($document, $policyId, 'SigPolicyId'), 'Identifier', static::POLICY_IDENTIFIER);
+        $policyHash = self::xades($document, $policyId, 'SigPolicyHash');
+        self::ds($document, $policyHash, 'DigestMethod')->setAttribute('Algorithm', self::SHA256);
+        self::ds($document, $policyHash, 'DigestValue', static::POLICY_DIGEST);
+        self::xades($document, self::xades($document, $policyId, 'SigPolicyQualifiers'), 'SigPolicyQualifier', static::POLICY_IDENTIFIER);
+
+        $format = self::xades($document, self::xades($document, $signedProperties, 'SignedDataObjectProperties'), 'DataObjectFormat');
+        $format->setAttribute('ObjectReference', '#' . $referenceId);
+        self::xades($document, $format, 'Description', $fileName);
+        self::xades($document, $format, 'MimeType', 'text/xml');
+
+        // Both digests below are taken in place: inclusive C14N carries the namespaces in scope at that point of the document.
+        $propertiesDigest->appendChild($document->createTextNode(self::digest($signedProperties->C14N(false, false))));
+
+        if (!openssl_sign($signedInfo->C14N(false, false), $raw, $privateKey, OPENSSL_ALGO_SHA256)) {
+            throw new SignatureException('The private key could not sign the document: ' . (string) openssl_error_string());
+        }
+
+        $signatureValue->appendChild($document->createTextNode(base64_encode($raw)));
+
+        return $document;
     }
 
     /**
-     * Overridden in a descendent instance to provide a jurisdiction specific data
-     * @param string $referenceId The id that will be added to the signed info reference
-     * @return SignedDataObjectProperties
+     * Checks an enveloped signature made by signDocument() or by any XAdES
+     * signer using the same algorithms: both reference digests and the
+     * signature value against the certificate in KeyInfo.
      */
-    protected function getSignedDataObjectProperties($referenceId = null)
+    public static function verifyDocument(DOMDocument $document): void
     {
-        $sdop = new SignedDataObjectProperties(
-            new DataObjectFormat(
-                $this->fileBeingSigned->isFile()  // File reference
-                    ? basename($this->fileBeingSigned->resource)
-                    : ($this->fileBeingSigned->isXmlDocument()
-                        ? ($this->fileBeingSigned->resource->baseURI
-                            ? $this->fileBeingSigned->resource->baseURI
-                            : $this->fileBeingSigned->saveFilename)
-                        : ($this->fileBeingSigned->isString()
-                            ? $this->fileBeingSigned->saveFilename
-                            : $this->fileBeingSigned->resource)),
-                null,
-                'text/xml', // MimeType
-                null, // Encoding
-                "#$referenceId"
-            ),
-            null, // CommitmentTypeIndication
-            null, // AllDataObjectsTimeStamp
-            null, // IndividualDataObjectsTimeStamp
-            null
-        );
+        $xpath = new DOMXPath($document);
+        $xpath->registerNamespace('ds', self::NS_DS);
 
-        return $sdop;
-    }
+        $signature = $xpath->query('/*/ds:Signature')->item(0);
 
-    protected function createQualifyingProperties(
-        $signatureId,
-        $certificate = null,
-        $signatureProductionPlace = null,
-        $signerRole = null,
-        $signaturePropertiesId = null,
-        $referenceId = null,
-        $signedPropertiesId = self::SignedPropertiesId
-    ) {
-        $loader = new CertificateLoader();
-        $certs = CertificateLoader::getCertificates($certificate);
-        $cert = null;
-        $issuer = null;
-        if ($certs) {
-            $cert = $loader->fromString(reset($certs));
-            if (next($certs)) {
-                $issuer = $loader->fromString(current($certs));
-            }
-        } else {
-            $cert = $loader->fromFile($certificate);
+        if (!$signature instanceof DOMElement) {
+            throw new SignatureException('The document is not signed.');
         }
 
-        $signingCertificate = SigningCertificateV2::fromCertificate($cert, $issuer);
+        $signedInfo = $xpath->query('ds:SignedInfo', $signature)->item(0);
+        $value = $xpath->query('ds:SignatureValue', $signature)->item(0);
+        $certificate = $xpath->query('ds:KeyInfo/ds:X509Data/ds:X509Certificate', $signature)->item(0);
 
-        $qualifyingProperties = new QualifyingProperties(
-            new SignedProperties(
-                new SignedSignatureProperties(
-                    new SigningTime(),
-                    null, // signingCertificate
-                    $signingCertificate, /**  @phpstan-ignore-line */
-                    $this->getSignaturePolicyIdentifier(),
-                    $signatureProductionPlace instanceof SignatureProductionPlace ? $signatureProductionPlace : null,
-                    $signatureProductionPlace instanceof SignatureProductionPlaceV2 ? $signatureProductionPlace : null,
-                    $signerRole instanceof SignerRole ? $signerRole : null,
-                    $signerRole instanceof SignerRoleV2 ? $signerRole : null,
-                    $signaturePropertiesId
-                ),
-                $this->getSignedDataObjectProperties($referenceId),
-                $signedPropertiesId
-            ),
-            null,
-            $signatureId
-        );
+        if (!$signedInfo instanceof DOMElement || $value === null || $certificate === null) {
+            throw new SignatureException('The signature is incomplete.');
+        }
 
-        return $qualifyingProperties;
+        foreach ($xpath->query('ds:Reference', $signedInfo) as $reference) {
+            /** @var DOMElement $reference */
+            $digest = trim((string) $xpath->query('ds:DigestValue', $reference)->item(0)?->textContent);
+            $uri = $reference->getAttribute('URI');
+
+            if ($uri === '') {
+                $copy = new DOMDocument();
+                $copy->loadXML((string) $document->saveXML());
+                $copyXpath = new DOMXPath($copy);
+                $copyXpath->registerNamespace('ds', self::NS_DS);
+                $copySignature = $copyXpath->query('/*/ds:Signature')->item(0);
+                $copySignature?->parentNode?->removeChild($copySignature);
+                $actual = self::digest($copy->documentElement->C14N(false, false));
+            } else {
+                $target = $xpath->query('//*[@Id="' . substr($uri, 1) . '"]')->item(0);
+
+                if ($target === null) {
+                    throw new SignatureException(sprintf('The signature references %s, which is not in the document.', $uri));
+                }
+
+                $actual = self::digest($target->C14N(false, false));
+            }
+
+            if (!hash_equals($digest, $actual)) {
+                throw new SignatureException(sprintf('The digest of reference "%s" does not match: the document was changed after signing.', $uri));
+            }
+        }
+
+        $pem = "-----BEGIN CERTIFICATE-----\n" . chunk_split(preg_replace('/\s+/', '', $certificate->textContent), 64, "\n") . "-----END CERTIFICATE-----\n";
+        $publicKey = openssl_pkey_get_public($pem);
+
+        if ($publicKey === false) {
+            throw new SignatureException('The certificate of the signature cannot be read.');
+        }
+
+        $raw = base64_decode(preg_replace('/\s+/', '', $value->textContent), true);
+
+        if ($raw === false || openssl_verify($signedInfo->C14N(false, false), $raw, $publicKey, OPENSSL_ALGO_SHA256) !== 1) {
+            throw new SignatureException('The signature value does not match the signed info.');
+        }
+    }
+
+    private static function certificateDer(string $certificate): string
+    {
+        if (!preg_match('/-----BEGIN CERTIFICATE-----(.+?)-----END CERTIFICATE-----/s', $certificate, $match)) {
+            throw new SignatureException('The signing certificate is not a PEM certificate.');
+        }
+
+        $der = base64_decode(preg_replace('/\s+/', '', $match[1]), true);
+
+        if ($der === false || $der === '') {
+            throw new SignatureException('The signing certificate cannot be decoded.');
+        }
+
+        return $der;
+    }
+
+    private static function digest(string $canonical): string
+    {
+        return base64_encode(hash('sha256', $canonical, true));
+    }
+
+    private static function ds(DOMDocument $document, DOMElement $parent, string $name, ?string $text = null): DOMElement
+    {
+        return self::element($document, $parent, self::NS_DS, 'ds:' . $name, $text);
+    }
+
+    private static function xades(DOMDocument $document, DOMElement $parent, string $name, ?string $text = null): DOMElement
+    {
+        return self::element($document, $parent, self::NS_XADES, 'xades:' . $name, $text);
+    }
+
+    private static function element(DOMDocument $document, DOMElement $parent, string $namespace, string $name, ?string $text): DOMElement
+    {
+        $element = $document->createElementNS($namespace, $name);
+
+        if ($text !== null) {
+            $element->appendChild($document->createTextNode($text));
+        }
+
+        $parent->appendChild($element);
+
+        return $element;
     }
 }

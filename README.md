@@ -23,9 +23,14 @@ Librería para integrarse con el sistema TicketBai
  * Emisión de gastos con y sin factura en el LROE de Bizkaia (Batuz).
 
 
+## Eskakizunak / Requisitos / Requirements
+
+PHP 8.3+ with `ext-dom` and `ext-openssl`. Signing needs no `ext-gmp`, so the
+library runs on the PHP bundled in NativePHP desktop apps.
+
 ## Instalazioa / Instalación
 ```shell
-composer require komma-softhouse/ticketbai
+composer require komma-softhouse/tbai-engine
 ```
 
 ## Erabilgarri dauden JSON dokumentuen definizioak / Definición de los documentos JSON disponibles
